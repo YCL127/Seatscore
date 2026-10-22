@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>座位保護時間：等效分鐘數換算圖表</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', Microsoft JhengHei, sans-serif; background: #161b26; color: #f1f5f9; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    .container { width: 96%; max-width: 1000px; background: #222938; padding: 24px; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    h2 { text-align: center; margin: 0 0 18px 0; color: #fff; font-size: 22px; }
+    .controls { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; background: #161b26; padding: 16px; border-radius: 10px; margin-bottom: 20px; }
+    .preset-btns { display: flex; gap: 10px; flex-wrap: wrap; }
+    .btn { padding: 10px 18px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 14px; background: #334155; color: #cbd5e1; transition: 0.2s; }
+    .btn.active { background: #3b82f6; color: #fff; box-shadow: 0 0 12px rgba(59,130,246,0.5); }
+    .custom-select { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+    select, input[type="number"] { background: #222938; color: #fff; border: 1px solid #475569; padding: 8px 12px; border-radius: 6px; font-size: 14px; }
+    .summary-banner { display: flex; justify-content: space-around; background: #1e293b; border-left: 4px solid #3b82f6; padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 15px; }
+    .summary-item span { font-weight: bold; color: #60a5fa; font-size: 18px; }
+    .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 13px; color: #94a3b8; }
+    .chart-box { position: relative; height: 380px; width: 100%; margin-bottom: 24px; }
+    table { width: 100%; border-collapse: collapse; background: #161b26; border-radius: 8px; overflow: hidden; font-size: 14px; }
+    th, td { padding: 12px 10px; text-align: center; border-bottom: 1px solid #2d3748; }
+    th { background: #2d3748; color: #cbd5e1; font-weight: bold; }
+    tr.highlight-row { background: rgba(59, 130, 246, 0.15); font-weight: bold; }
+    .tag-cap { background: #ef4444; color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 4px; margin-left: 4px; }
+    .tag-ok { color: #94a3b8; font-size: 12px; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>⏱️ 座位保護期「等效時間」換算圖表</h2>
+
+  <div class="controls">
+    <div class="preset-btns">
+      <button class="btn active" id="btnVIPRoom" onclick="setPreset(0, 30, 'btnVIPRoom')">👑 貴賓包廂 30 分鐘</button>
+      <button class="btn" id="btnVIPSeat" onclick="setPreset(1, 30, 'btnVIPSeat')">💺 貴賓席 30 分鐘</button>
+    </div>
+    <div class="custom-select">
+      <label>自訂基準：</label>
+      <select id="baseTierSelect" onchange="updateAll()">
+        <option value="0">貴賓包廂</option>
+        <option value="1">貴賓席 (我的座位)</option>
+        <option value="2">豪華席</option>
+        <option value="3">中央席</option>
+        <option value="4">內野席</option>
+        <option value="5">外野席</option>
+      </select>
+      <input type="number" id="baseTimeInput" value="30" min="1" max="360" style="width:65px;" oninput="updateAll()"> 分鐘
+    </div>
+  </div>
+
+  <div class="summary-banner" id="summaryBanner"></div>
+
+  <div class="chart-header">
+    <span>📊 橫向長條圖：要獲得相同資源，各座位所需花費的「分鐘數」（越短代表效率越高）</span>
+    <label style="cursor:pointer;">
+      <input type="checkbox" id="includeStand" onchange="updateAll()"> 顯示「站席」於圖表中 (數值極大)
+    </label>
+  </div>
+
+  <div class="chart-box">
+    <canvas id="equivChart"></canvas>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>對照座位階級</th>
+        <th>💎 鑽石等效時間</th>
+        <th>🪙 金幣等效時間</th>
+        <th>📦 寶箱等效時間</th>
+        <th>該座位單次滿載上限</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody"></tbody>
+  </table>
+</div>
+
+<script>
+  const tiers = [
+    { name: '貴賓包廂', diamond: 60, gold: 40000, box: 50, max: 180 },
+    { name: '貴賓席', diamond: 50, gold: 30000, box: 45, max: 180 },
+    { name: '豪華席', diamond: 45, gold: 25000, box: 40, max: 180 },
+    { name: '中央席', diamond: 40, gold: 20000, box: 35, max: 180 },
+    { name: '內野席', diamond: 35, gold: 15000, box: 30, max: 180 },
+    { name: '外野席', diamond: 30, gold: 10000, box: 25, max: 180 },
+    { name: '站席', diamond: 5, gold: 500, box: 2, max: 360 }
+  ];
+
+  let chart = null;
+
+  function formatMin(m) {
+    const mins = Math.floor(m);
+    const secs = Math.round((m - mins) * 60);
+    if (secs === 0) return `${mins} 分鐘`;
+    if (secs === 60) return `${mins + 1} 分鐘`;
+    return `${m.toFixed(1)} 分 <span class="tag-ok">(${mins}分${secs}秒)</span>`;
+  }
+
+  function setPreset(tierIdx, mins, btnId) {
+    document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+    document.getElementById(btnId).classList.add('active');
+    document.getElementById('baseTierSelect').value = tierIdx;
+    document.getElementById('baseTimeInput').value = mins;
+    updateAll();
+  }
+
+  function updateAll() {
+    const baseIdx = parseInt(document.getElementById('baseTierSelect').value);
+    const baseMins = parseFloat(document.getElementById('baseTimeInput').value) || 0;
+    const includeStand = document.getElementById('includeStand').checked;
+
+    // 檢查按鈕高亮狀態
+    document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+    if (baseIdx === 0 && baseMins === 30) document.getElementById('btnVIPRoom').classList.add('active');
+    if (baseIdx === 1 && baseMins === 30) document.getElementById('btnVIPSeat').classList.add('active');
+
+    const baseTier = tiers[baseIdx];
+    const totalDiamond = baseTier.diamond * baseMins;
+    const totalGold = baseTier.gold * baseMins;
+    const totalBox = baseTier.box * baseMins;
+
+    // 更新上方總收益橫幅
+    document.getElementById('summaryBanner').innerHTML = `
+      <div class="summary-item">基準：<span>${baseTier.name} (${baseMins}分鐘)</span></div>
+      <div class="summary-item">💎 累積鑽石：<span>${totalDiamond.toLocaleString()}</span></div>
+      <div class="summary-item">🪙 累積金幣：<span>${totalGold.toLocaleString()}</span></div>
+      <div class="summary-item">📦 累積寶箱：<span>${totalBox.toLocaleString()}</span></div>
+    `;
+
+    // 更新表格
+    const tbody = document.getElementById('tableBody');
+    tbody.innerHTML = tiers.map((t, idx) => {
+      const dMin = totalDiamond / t.diamond;
+      const gMin = totalGold / t.gold;
+      const bMin = totalBox / t.box;
+
+      const dCap = dMin > t.max ? `<span class="tag-cap">超上限</span>` : '';
+      const gCap = gMin > t.max ? `<span class="tag-cap">超上限</span>` : '';
+      const bCap = bMin > t.max ? `<span class="tag-cap">超上限</span>` : '';
+
+      return `
+        <tr class="${idx === baseIdx ? 'highlight-row' : ''}">
+          <td>${t.name} ${idx === baseIdx ? '⭐(基準)' : ''}</td>
+          <td>${formatMin(dMin)} ${dCap}</td>
+          <td>${formatMin(gMin)} ${gCap}</td>
+          <td>${formatMin(bMin)} ${bCap}</td>
+          <td>${t.max} 分鐘</td>
+        </tr>
+      `;
+    }).join('');
+
+    // 更新圖表
+    const chartTiers = includeStand ? tiers : tiers.slice(0, 6);
+    const labels = chartTiers.map(t => t.name);
+    const dData = chartTiers.map(t => +(totalDiamond / t.diamond).toFixed(1));
+    const gData = chartTiers.map(t => +(totalGold / t.gold).toFixed(1));
+    const bData = chartTiers.map(t => +(totalBox / t.box).toFixed(1));
+
+    if (!chart) {
+      const ctx = document.getElementById('equivChart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [
+            { label: '💎 鑽石等效時間 (分)', data: dData, backgroundColor: '#c084fc', borderRadius: 4 },
+            { label: '🪙 金幣等效時間 (分)', data: gData, backgroundColor: '#facc15', borderRadius: 4 },
+            { label: '📦 寶箱等效時間 (分)', data: bData, backgroundColor: '#38bdf8', borderRadius: 4 }
+          ]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { color: '#f1f5f9', font: { size: 13 } } },
+            tooltip: {
+              callbacks: {
+                label: ctx => `${ctx.dataset.label}: 需 ${ctx.parsed.x} 分鐘`
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { color: '#cbd5e1' }, grid: { color: '#334155' }, title: { display: true, text: '需要花費的時間 (分鐘)', color: '#94a3b8' } },
+            y: { ticks: { color: '#f1f5f9', font: { size: 13, weight: 'bold' } }, grid: { color: '#334155' } }
+          }
+        }
+      });
+    } else {
+      chart.data.labels = labels;
+      chart.data.datasets[0].data = dData;
+      chart.data.datasets[1].data = gData;
+      chart.data.datasets[2].data = bData;
+      chart.update();
+    }
+  }
+
+  updateAll();
+</script>
+</body>
+</html>
